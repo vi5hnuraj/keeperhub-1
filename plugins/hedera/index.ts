@@ -3,31 +3,66 @@ import { registerIntegration } from "@/plugins/registry-core";
 import { HederaIcon } from "./icon";
 
 /**
- * Hedera plugin — verify workflow output against Hedera's public consensus.
+ * Hedera plugin — anchor workflow output to Hedera's public consensus and
+ * verify it back from the network's own mirror node.
  *
- * Read-only by design: `verify-message` queries the public HCS mirror node
- * over safeFetch, so this plugin adds no server dependencies. A workflow can
- * gate on `verified: true` knowing the proof comes from the Hedera network
- * itself, not from the system that anchored the message.
+ * Two actions with deliberately different egress postures:
+ *
+ *   verify-message  reads the public mirror over safeFetch against a
+ *                   compile-time constant host, so it is "fixed-host" and
+ *                   stays free.
+ *   submit-message  posts to an operator relay whose URL the user configures,
+ *                   so it is "user-destination" and plan-gated like every other
+ *                   action that can reach a host of the operator's choosing.
+ *
+ * Neither action holds signing material. The relay owns the Hedera operator
+ * key; this plugin never sees it, never imports @hashgraph/sdk, and never opens
+ * a socket the SSRF guard cannot see.
  */
 const hederaPlugin: IntegrationPlugin = {
   type: "hedera",
-  // Both mirror hosts are compile-time constants and this plugin declares no
-  // formFields, so nothing user-supplied can choose the origin: "fixed-host",
-  // which stays free. "user-destination" would plan-gate this read-only
-  // action behind action.external-request via the catch-all in
-  // lib/features/action-egress.ts.
-  egress: "fixed-host",
+  // The relay URL is a user-supplied destination (see the `relayUrl` form
+  // field), so the plugin default is user-destination. verify-message overrides
+  // it to fixed-host, because a relay connection must not plan-gate a
+  // read-only query against two constant public mirror hosts.
+  egress: "user-destination",
   label: "Hedera",
   description:
-    "Verify messages on Hedera Consensus Service via the public mirror node",
+    "Anchor messages on Hedera Consensus Service through an operator relay and verify them from the public mirror node",
 
   icon: HederaIcon,
 
-  // The verify action is a public read; no connection required.
+  // verify-message needs no connection at all. submit-message needs a relay
+  // connection, but its presence is the user's choice, not a requirement of
+  // the integration - mirrors blockscout.
   requiresCredentials: false,
 
-  formFields: [],
+  formFields: [
+    {
+      id: "relayUrl",
+      label: "Operator Relay URL",
+      type: "url",
+      placeholder: "https://relay.example.com/hcs/submit",
+      configKey: "relayUrl",
+      envVar: "HEDERA_RELAY_URL",
+      helpText:
+        "HTTPS endpoint that holds a Hedera operator key and signs submissions. Only submit-message uses it, and it must be a service you control or trust.",
+      helpLink: {
+        text: "See the relay contract",
+        url: "https://docs.keeperhub.com/plugins/hedera",
+      },
+    },
+    {
+      id: "relayToken",
+      label: "Relay Token (optional)",
+      type: "password",
+      placeholder: "Optional - sent as Authorization: Bearer",
+      configKey: "relayToken",
+      envVar: "HEDERA_RELAY_TOKEN",
+      helpText:
+        "Optional bearer token for the relay. It authorizes submissions; it does not carry signing material.",
+    },
+  ],
 
   testConfig: {
     getTestFunction: async () => {
@@ -43,6 +78,9 @@ const hederaPlugin: IntegrationPlugin = {
       description:
         "Read a message from an HCS topic via the public mirror node and check it against an expected payload",
       category: "Hedera",
+      // Constant mirror host, no user input in the origin: this read stays free
+      // even though the plugin default is user-destination for the relay action.
+      egress: "fixed-host",
       stepFunction: "verifyMessageStep",
       stepImportPath: "verify-message",
       outputFields: [
@@ -93,6 +131,58 @@ const hederaPlugin: IntegrationPlugin = {
           defaultValue: "testnet",
           example: "testnet",
           helpTip: "Which Hedera network's public mirror node to query.",
+        },
+      ],
+    },
+    {
+      slug: "submit-message",
+      label: "Submit HCS Message",
+      description:
+        "Anchor a workflow payload to an HCS topic through your operator relay, then verify it with Verify HCS Message",
+      category: "Hedera",
+      stepFunction: "submitMessageStep",
+      stepImportPath: "submit-message",
+      outputFields: [
+        { field: "success", description: "Whether the relay accepted the submission" },
+        { field: "topicId", description: "The topic the message was submitted to" },
+        { field: "network", description: "The Hedera network the relay submitted to" },
+        { field: "messageBytes", description: "UTF-8 byte length of the submitted payload" },
+        { field: "transactionId", description: "Transaction id as reported by the relay - confirm it with Verify HCS Message" },
+        { field: "sequenceNumber", description: "Sequence number as reported by the relay - confirm it with Verify HCS Message" },
+        { field: "consensusTimestamp", description: "Consensus timestamp as reported by the relay - confirm it with Verify HCS Message" },
+        { field: "error", description: "Error message if failed" },
+      ],
+      configFields: [
+        {
+          key: "topicId",
+          label: "Topic ID",
+          type: "template-input",
+          placeholder: "0.0.10590142",
+          example: "0.0.10590142",
+          required: true,
+          helpTip: "The HCS topic to submit to, e.g. 0.0.10590142.",
+        },
+        {
+          key: "message",
+          label: "Message",
+          type: "template-textarea",
+          placeholder: '{{AnchorPayload.digest}} or a JSON record',
+          required: true,
+          helpTip:
+            "The payload to anchor, e.g. a digest or receipt. At most 4096 bytes: Hedera splits anything larger into one chunk per sequence number, which Verify HCS Message cannot check.",
+        },
+        {
+          key: "network",
+          label: "Network",
+          type: "select",
+          required: true,
+          options: [
+            { value: "testnet", label: "Testnet" },
+            { value: "mainnet", label: "Mainnet" },
+          ],
+          defaultValue: "testnet",
+          example: "testnet",
+          helpTip: "Which Hedera network the relay should submit to.",
         },
       ],
     },

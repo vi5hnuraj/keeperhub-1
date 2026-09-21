@@ -433,17 +433,29 @@ describe("hedera plugin — verify-message", () => {
     expect(safeFetchMock).not.toHaveBeenCalled();
   });
 
-  it("stays credential-free: no connection fields and no credential requirement", async () => {
-    // The verify path reads no credentials, so the integration must not ask for
-    // any. ActionConfigFieldBase has no envVar, so the earlier version of this
-    // case could never fire; the registry-wide invariant it was reaching for
-    // lives in tests/unit/credential-map-coverage.test.ts (every credentials.X
-    // read in a step file must map to a PLUGIN_CREDENTIAL_MAP envVar). What is
-    // checkable here is the plugin-level surface, and that is what a failure
-    // would actually change.
+  it("keeps the read action free and connection-free while submit uses the relay", async () => {
+    // The connection exists only to point submit-message at an operator relay.
+    // verify-message reads no credentials, works with no connection at all, and
+    // must stay fixed-host: the mirror hosts are constants, so a read against
+    // them must not inherit the plugin's user-destination default and get
+    // plan-gated. ActionConfigFieldBase has no envVar, so the earlier version of
+    // this case could never fire; the registry-wide invariant it was reaching
+    // for lives in tests/unit/credential-map-coverage.test.ts.
     const plugin = (await import("@/plugins/hedera/index")).default;
     expect(plugin.requiresCredentials).toBe(false);
-    expect(plugin.formFields).toHaveLength(0);
-    expect(plugin.actions.length).toBeGreaterThan(0);
+    expect(plugin.formFields.map((field) => field.id)).toEqual([
+      "relayUrl",
+      "relayToken",
+    ]);
+
+    const verify = plugin.actions.find(
+      (action) => action.slug === "verify-message"
+    );
+    expect(verify?.egress).toBe("fixed-host");
+
+    const submit = plugin.actions.find(
+      (action) => action.slug === "submit-message"
+    );
+    expect(submit?.egress).toBeUndefined();
   });
 });
