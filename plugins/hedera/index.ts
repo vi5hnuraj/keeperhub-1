@@ -142,6 +142,14 @@ const hederaPlugin: IntegrationPlugin = {
       category: "Hedera",
       stepFunction: "submitMessageStep",
       stepImportPath: "submit-message",
+      // The relay URL lives on the connection, so this action has to be able to
+      // select one: the Connection selector renders only when the action
+      // requires credentials (actionRequiresCredentials). Leaving it unset
+      // would inherit the plugin's connection-free default and the node could
+      // never carry an integrationId, so the step would always fail with "no
+      // relay configured". verify-message keeps that default deliberately, so
+      // its node never asks for a connection.
+      requiresCredentials: true,
       outputFields: [
         { field: "success", description: "Whether the relay accepted the submission" },
         { field: "topicId", description: "The topic the message was submitted to" },

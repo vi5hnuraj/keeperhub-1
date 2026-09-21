@@ -456,6 +456,12 @@ describe("hedera plugin — verify-message", () => {
     const submit = plugin.actions.find(
       (action) => action.slug === "submit-message"
     );
+    // Inherits the plugin's user-destination default (the relay host is the
+    // user's), but must require credentials: the Connection selector renders
+    // from actionRequiresCredentials, and the relay URL lives on the connection.
+    // Without this the node can never carry an integrationId.
     expect(submit?.egress).toBeUndefined();
+    expect(submit?.requiresCredentials).toBe(true);
+    expect(verify?.requiresCredentials).toBeUndefined();
   });
 });
